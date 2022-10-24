@@ -29,6 +29,7 @@ func main() {
 	source := initialize_source(port)
 	m_queue := make(chan message_wrapper, 500)
 
+	// goroutine to accept incoming connections and route messages into message queue
 	go func() {
 		for {
 			conn, err := source.Accept()
@@ -39,25 +40,39 @@ func main() {
 				dec := gob.NewDecoder(conn)
 				message_map := make(map[string]string)
 				for {
-					dec.Decode(&message_map)
+					decerr := dec.Decode(&message_map)
+					if decerr != nil {
+						fmt.Println("decerr")
+						conn.Close()
+						return
+					} else {
 					m_queue <- message_wrapper{message: message_map, sender_conn: conn}
+					}
 				}
 			}()
 		}
 	}()
 
+	// process message queue
 	user_connections := make(map[string]net.Conn)
+	connection_encodings := make(map[string]*gob.Encoder)
 	for {
 		select {
 		case m := <-m_queue:
 			fmt.Println(m)
 			if m.message["to"] == SERVER {
+				fmt.Println("Registering User")
 				user_connections[m.message["from"]] = m.sender_conn
+				connection_encodings[m.message["from"]]= gob.NewEncoder(m.sender_conn)
 			} else {
 				if v, ok := user_connections[m.message["to"]]; ok {
 					go func() {
-						enc := gob.NewEncoder(v)
-						enc.Encode(m.message)
+						encerr := connection_encodings[m.message["to"]].Encode(m.message)
+						if encerr != nil {
+							fmt.Println("encerr")
+							delete(user_connections,m.message["to"])
+							v.Close()
+						}
 					}()
 				}
 			}
